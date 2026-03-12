@@ -1,0 +1,3 @@
+[submodule "repos/qwen3.c"]
+	path = repos/qwen3.c
+	url = https://github.com/thefirehacker/qwen3.c.git
