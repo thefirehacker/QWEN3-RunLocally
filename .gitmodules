@@ -1,3 +1,6 @@
 [submodule "repos/qwen3.c"]
 	path = repos/qwen3.c
 	url = https://github.com/thefirehacker/qwen3.c.git
+[submodule "repos/qwen3.cu"]
+	path = repos/qwen3.cu
+	url = https://github.com/thefirehacker/qwen3.cu.git
