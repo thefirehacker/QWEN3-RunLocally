@@ -21,7 +21,9 @@ The model runs entirely on your machine. No API keys, no external services.
 
 ## Prerequisites
 
-- **macOS** with Xcode Command Line Tools (for `clang` and `make`)
+### macOS
+
+- Xcode Command Line Tools (for `clang` and `make`)
 - **~3 GB disk space** for the FP32 model file
 - **Git** (with [Git LFS](https://git-lfs.com/) for downloading the model)
 
@@ -30,6 +32,54 @@ Install Xcode CLI tools if needed:
 ```bash
 xcode-select --install
 ```
+
+### Windows
+
+The C inference code uses `mmap` and POSIX APIs that don't exist natively on Windows. Two options:
+
+**Option A: WSL2 (simplest)**
+
+```powershell
+wsl --install
+```
+
+Then open the WSL terminal and follow the Quick Start instructions below as-is.
+
+**Option B: MSYS2 + MinGW-w64 (native Windows)**
+
+1. Download and install MSYS2 from https://www.msys2.org/
+2. Open the **MSYS2 UCRT64** terminal (not Command Prompt or PowerShell)
+3. Install the toolchain:
+
+```bash
+pacman -S mingw-w64-ucrt-x86_64-gcc make git git-lfs
+```
+
+4. Navigate to your project:
+
+```bash
+cd /c/Users/YourName/path/to/Qwen3-RunLocally/repos/qwen3.c
+```
+
+5. Build and run normally:
+
+```bash
+make run
+./run Qwen3-0.6B-FP32.gguf
+```
+
+For the sampling visualizer, also install Node.js:
+
+```bash
+pacman -S mingw-w64-ucrt-x86_64-nodejs
+```
+
+**Important:** Always use the MSYS2 UCRT64 terminal. Regular Windows Command Prompt and PowerShell will not work because they lack the POSIX layer (`mmap`, `unistd.h`). Do not attempt to compile with MSVC.
+
+### Linux
+
+- GCC or Clang, `make`, Git, Git LFS
+- Everything works out of the box: `sudo apt install build-essential git git-lfs`
 
 ---
 
