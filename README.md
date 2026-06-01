@@ -109,6 +109,48 @@ Full usage: [qwen3.c Quick Start](https://github.com/thefirehacker/qwen3.c#quick
 
 ---
 
+## Sampling Visualization
+
+A live dashboard that shows how **temperature** and **top-p** affect token selection in real time — using actual model logits from Qwen3 inference.
+
+![Sampling Visualizer Dashboard](assets/sampling-viz-dashboard.png)
+
+### Build and run
+
+```bash
+cd repos/qwen3.c
+make runviz
+```
+
+Then open 3 terminals:
+
+**Terminal 1** — Dashboard:
+```bash
+cd apps/sampling-viz
+npm install   # first time only
+npm run dev
+```
+
+**Terminal 2** — Bridge + inference:
+```bash
+cd repos/qwen3.c
+cd ../../tools && npm install && cd -   # first time only
+node ../../tools/sampling-bridge.mjs ./run_viz Qwen3-0.6B-FP32.gguf -v 1 -t 0.6 -p 0.95
+```
+
+**Browser** — http://localhost:3000
+
+The dashboard shows:
+- Top-20 token probabilities after temperature scaling
+- Nucleus membership (green = in top-p, gray = tail excluded)
+- Chosen token highlighted in gold
+- Nucleus stats (size, mass, cutoff)
+- Live generated token stream
+
+Try different values: `-t 0.2` (deterministic) vs `-t 1.2` (random), `-p 0.5` (tight) vs `-p 0.99` (wide).
+
+---
+
 ## Project structure
 
 ```
@@ -117,12 +159,18 @@ Qwen3-RunLocally/
 ├── .gitmodules         # Submodule pointer to qwen3.c
 ├── repos/
 │   ├── qwen3.c/        # Inference engine (submodule: thefirehacker/qwen3.c)
-│   │   ├── run.c       # Main inference + chat loop
-│   │   ├── Makefile
+│   │   ├── run.c       # Main inference + chat loop + viz hook
+│   │   ├── Makefile    # make run | make runviz
 │   │   ├── vocab.txt   # Tokenizer vocabulary
 │   │   └── merges.txt  # BPE merge rules
 │   └── blog/
 │       └── qwen3.c.md  # Step-by-step learning guide (Quarto)
+├── tools/
+│   └── sampling-bridge.mjs  # WebSocket bridge (parses viz events from run_viz)
+├── apps/
+│   └── sampling-viz/   # Next.js live sampling dashboard
+└── assets/
+    └── sampling-viz-dashboard.png
 ```
 
 The model file `Qwen3-0.6B-FP32.gguf` is not in the repo; you download it once (see Quick Start).
