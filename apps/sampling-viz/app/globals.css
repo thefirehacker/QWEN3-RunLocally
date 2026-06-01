@@ -1,13 +1,13 @@
 :root {
-  --bg: #0a0a0f;
-  --surface: #14141f;
-  --border: #2a2a3a;
-  --text: #e4e4ef;
-  --text-dim: #8888aa;
-  --accent: #6366f1;
+  --bg: #2c2417;
+  --surface: #1a1510;
+  --border: #3d3225;
+  --text: #f0ebe1;
+  --text-dim: #a89e8c;
+  --accent: #d4a74a;
   --nucleus: #22c55e;
-  --tail: #4b5563;
-  --chosen: #f59e0b;
+  --tail: #5c5347;
+  --chosen: #d4a74a;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -34,9 +34,52 @@ header {
   margin-bottom: 24px;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-left img {
+  width: 28px;
+  height: 28px;
+}
+
 header h1 {
-  font-size: 1.25rem;
+  font-size: 1.1rem;
   font-weight: 600;
+}
+
+header h1 span {
+  color: var(--accent);
+}
+
+.header-subtitle {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-links {
+  display: flex;
+  gap: 12px;
+  font-size: 0.75rem;
+}
+
+.header-links a {
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.header-links a:hover {
+  color: var(--accent);
 }
 
 .status {
@@ -59,9 +102,66 @@ header h1 {
   animation: pulse 2s infinite;
 }
 
+.status-dot.file-mode {
+  background: var(--accent);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+.replay-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 0.8rem;
+}
+
+.replay-banner .step-info {
+  color: var(--accent);
+}
+
+.replay-banner button {
+  background: var(--accent);
+  color: var(--surface);
+  border: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.replay-banner button:hover {
+  opacity: 0.85;
+}
+
+.prompt-context {
+  display: flex;
+  gap: 24px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  margin-bottom: 16px;
+  font-size: 0.8rem;
+}
+
+.prompt-context .ctx-label {
+  color: var(--text-dim);
+  margin-right: 6px;
+  font-weight: 600;
+}
+
+.prompt-context .ctx-value {
+  color: var(--text);
+  font-style: italic;
 }
 
 .params {
@@ -211,11 +311,24 @@ header h1 {
   border-radius: 4px;
   background: var(--surface);
   border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.timeline-token:hover {
+  border-color: var(--accent);
+  background: var(--bg);
+}
+
+.timeline-token.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(212, 167, 74, 0.1);
 }
 
 .timeline-token:last-child {
-  border-color: var(--chosen);
-  color: var(--chosen);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .waiting {
@@ -241,6 +354,24 @@ header h1 {
   border: 1px solid var(--border);
 }
 
+.file-drop {
+  margin-top: 24px;
+  padding: 20px;
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.file-drop:hover {
+  border-color: var(--accent);
+}
+
+.file-drop input {
+  display: none;
+}
+
 .legend {
   display: flex;
   gap: 16px;
@@ -258,4 +389,22 @@ header h1 {
   width: 12px;
   height: 12px;
   border-radius: 3px;
+}
+
+footer.app-footer {
+  margin-top: 48px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+footer.app-footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+footer.app-footer a:hover {
+  text-decoration: underline;
 }

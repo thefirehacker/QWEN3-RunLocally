@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 
 interface TopToken {
   id: number;
@@ -24,12 +24,42 @@ interface SampleEvent {
   top: TopToken[];
 }
 
+interface PromptContext {
+  type: "prompt_context";
+  system_prompt: string;
+  user_prompt: string;
+}
+
+type SessionEvent = SampleEvent | PromptContext;
+
 export default function Home() {
   const [connected, setConnected] = useState(false);
-  const [event, setEvent] = useState<SampleEvent | null>(null);
-  const [timeline, setTimeline] = useState<string[]>([]);
+  const [history, setHistory] = useState<SampleEvent[]>([]);
+  const [selectedIdx, setSelectedIdx] = useState<number>(-1);
+  const [mode, setMode] = useState<"live" | "replay" | "file">("live");
+  const [promptCtx, setPromptCtx] = useState<PromptContext | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
+
+  const event = selectedIdx === -1 ? history[history.length - 1] || null : history[selectedIdx];
+
+  useEffect(() => {
+    fetch("/sampling-session.json")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: SessionEvent[]) => {
+        if (data && data.length > 0) {
+          const samples = data.filter((e): e is SampleEvent => e.type === "sample_step");
+          const ctx = data.find((e): e is PromptContext => e.type === "prompt_context");
+          if (samples.length > 0) {
+            setHistory(samples);
+            setMode("file");
+            setSelectedIdx(0);
+            if (ctx) setPromptCtx(ctx);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:3847";
@@ -40,7 +70,11 @@ export default function Home() {
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        setConnected(true);
+        setMode("live");
+        setSelectedIdx(-1);
+      };
       ws.onclose = () => {
         setConnected(false);
         reconnectTimer = setTimeout(connect, 2000);
@@ -48,10 +82,12 @@ export default function Home() {
       ws.onerror = () => ws.close();
       ws.onmessage = (msg) => {
         try {
-          const data: SampleEvent = JSON.parse(msg.data);
+          const data = JSON.parse(msg.data);
           if (data.type === "sample_step") {
-            setEvent(data);
-            setTimeline((prev) => [...prev.slice(-200), data.chosen_piece]);
+            setHistory((prev) => [...prev, data]);
+            if (mode === "live") setSelectedIdx(-1);
+          } else if (data.type === "prompt_context") {
+            setPromptCtx(data);
           }
         } catch {}
       };
@@ -65,29 +101,63 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (timelineRef.current) {
+    if (timelineRef.current && mode === "live") {
       timelineRef.current.scrollTop = timelineRef.current.scrollHeight;
     }
-  }, [timeline]);
+  }, [history, mode]);
+
+  const handleTokenClick = useCallback((idx: number) => {
+    setSelectedIdx(idx);
+    setMode("replay");
+  }, []);
+
+  const backToLive = useCallback(() => {
+    setSelectedIdx(-1);
+    setMode("live");
+  }, []);
+
+  const handleFileLoad = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data: SessionEvent[] = JSON.parse(ev.target?.result as string);
+        const samples = data.filter((e): e is SampleEvent => e.type === "sample_step");
+        const ctx = data.find((e): e is PromptContext => e.type === "prompt_context");
+        if (samples.length > 0) {
+          setHistory(samples);
+          setMode("file");
+          setSelectedIdx(0);
+          if (ctx) setPromptCtx(ctx);
+        }
+      } catch {}
+    };
+    reader.readAsText(file);
+  }, []);
+
+  const statusText = mode === "live" ? "Live" : mode === "file" ? "File loaded" : `Step ${selectedIdx + 1} / ${history.length}`;
+  const statusClass = connected ? "connected" : mode === "file" ? "file-mode" : "";
 
   if (!event) {
     return (
       <div className="container">
-        <header>
-          <h1>Qwen3 Sampling Visualizer</h1>
-          <div className="status">
-            <div className={`status-dot ${connected ? "connected" : ""}`} />
-            {connected ? "Connected to bridge" : "Waiting for bridge..."}
-          </div>
-        </header>
+        <Header statusClass={statusClass} statusText={connected ? "Connected" : "Offline"} />
         <div className="waiting">
           <h2>Waiting for sampling events...</h2>
           <p>Start the bridge and inference:</p>
-          <code>node tools/sampling-bridge.mjs ./run model.gguf -v 1 -t 0.6 -p 0.95</code>
+          <code>node tools/sampling-bridge.mjs ./run_viz model.gguf -v 1 -t 0.6 -p 0.95</code>
           <p style={{ marginTop: 8, fontSize: "0.8rem", color: "var(--text-dim)" }}>
-            Then ask a question in the chat to see live sampling data here.
+            Or load a saved session file:
           </p>
+          <div className="file-drop">
+            <label>
+              Drop or click to load sampling-session.json
+              <input type="file" accept=".json" onChange={handleFileLoad} />
+            </label>
+          </div>
         </div>
+        <AppFooter />
       </div>
     );
   }
@@ -96,13 +166,44 @@ export default function Home() {
 
   return (
     <div className="container">
-      <header>
-        <h1>Qwen3 Sampling Visualizer</h1>
-        <div className="status">
-          <div className={`status-dot ${connected ? "connected" : ""}`} />
-          {connected ? "Live" : "Disconnected"}
+      <Header statusClass={statusClass} statusText={statusText} />
+
+      {mode === "replay" && (
+        <div className="replay-banner">
+          <span className="step-info">
+            Replaying step {selectedIdx + 1} of {history.length}
+          </span>
+          <button onClick={backToLive}>Back to Live</button>
         </div>
-      </header>
+      )}
+      {mode === "file" && (
+        <div className="replay-banner">
+          <span className="step-info">
+            Loaded session: step {selectedIdx + 1} of {history.length} — click tokens to explore
+          </span>
+          <label style={{ cursor: "pointer", fontSize: "0.75rem", color: "var(--accent)" }}>
+            Load another file
+            <input type="file" accept=".json" onChange={handleFileLoad} style={{ display: "none" }} />
+          </label>
+        </div>
+      )}
+
+      {promptCtx && (promptCtx.system_prompt || promptCtx.user_prompt) && (
+        <div className="prompt-context">
+          {promptCtx.system_prompt && (
+            <span>
+              <span className="ctx-label">System:</span>
+              <span className="ctx-value">{promptCtx.system_prompt}</span>
+            </span>
+          )}
+          {promptCtx.user_prompt && (
+            <span>
+              <span className="ctx-label">Q:</span>
+              <span className="ctx-value">{promptCtx.user_prompt}</span>
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="params">
         <span>
@@ -227,15 +328,59 @@ export default function Home() {
       </div>
 
       <div className="card timeline">
-        <h2>Generated Tokens</h2>
+        <h2>Generated Tokens (click to replay)</h2>
         <div className="timeline-tokens" ref={timelineRef}>
-          {timeline.map((tok, i) => (
-            <span className="timeline-token" key={i}>
-              {tok === " " ? "\u2423" : tok === "\n" ? "\\n" : tok}
+          {history.map((evt, i) => (
+            <span
+              className={`timeline-token ${i === selectedIdx ? "active" : ""}`}
+              key={i}
+              onClick={() => handleTokenClick(i)}
+              title={`Step ${i + 1}, pos=${evt.pos}`}
+            >
+              {evt.chosen_piece === " " ? "\u2423" : evt.chosen_piece === "\n" ? "\\n" : evt.chosen_piece}
             </span>
           ))}
         </div>
       </div>
+
+      <AppFooter />
     </div>
+  );
+}
+
+function Header({ statusClass, statusText }: { statusClass: string; statusText: string }) {
+  return (
+    <header>
+      <div className="header-left">
+        <img src="/favicon-32x32.png" alt="First Break AI" />
+        <div>
+          <h1>
+            <span>First Break AI</span> — Sampling Visualizer
+          </h1>
+          <div className="header-subtitle">Step 2: Understanding How LLMs Choose Tokens</div>
+        </div>
+      </div>
+      <div className="header-right">
+        <div className="header-links">
+          <a href="https://cohort.bubblnet.com/" target="_blank" rel="noopener">Cohort</a>
+          <a href="https://discord.gg/hRPese4H3F" target="_blank" rel="noopener">Discord</a>
+          <a href="https://github.com/thefirehacker/firstbreakai" target="_blank" rel="noopener">GitHub</a>
+        </div>
+        <div className="status">
+          <div className={`status-dot ${statusClass}`} />
+          {statusText}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function AppFooter() {
+  return (
+    <footer className="app-footer">
+      &copy; 2026 <a href="https://cohort.bubblnet.com/">First Break AI</a> &mdash;
+      Powered by <a href="https://fetchlens.ai">fetchlens.ai</a> |{" "}
+      <a href="https://github.com/thefirehacker/qwen3.c">qwen3.c</a>
+    </footer>
   );
 }

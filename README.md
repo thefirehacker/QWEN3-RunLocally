@@ -1,6 +1,8 @@
 # Qwen3 Run Locally
 
-Run **Qwen 3 0.6B** on your Mac with minimal setup: pure C inference, no Python, no CUDA, no cloud. This repo bundles the inference code and a step-by-step guide so you can run the model and understand how it works.
+Part of [**First Break AI**](https://cohort.bubblnet.com/) — a free, open cohort to learn AI by doing.
+
+Run **Qwen 3 0.6B** on your Mac with minimal setup: pure C inference, no Python, no CUDA, no cloud. This repo bundles the inference code, a sampling visualizer, and a step-by-step guide so you can run the model and understand how it works.
 
 ---
 
@@ -179,8 +181,10 @@ The model file `Qwen3-0.6B-FP32.gguf` is not in the repo; you download it once (
 
 ## Learning resources
 
-- **[Step 2: Run a model locally](repos/blog/qwen3.c.md)** — Full guide: tokens, chat templates, attention, sampling, KV cache. Written for [First Break AI](https://thefirehacker.github.io/firstbreakai/) Step 2.
+- **[First Break AI Cohort](https://cohort.bubblnet.com/)** — Free, open cohort to learn AI by doing: inference, training, and product building.
+- **[Step 2: Run a model locally](repos/blog/qwen3.c.md)** — Full guide: tokens, chat templates, attention, sampling, KV cache. Written for [First Break AI](https://cohort.bubblnet.com/) Step 2.
 - **[qwen3.c](https://github.com/thefirehacker/qwen3.c)** — Upstream C implementation (lightweight, no dependencies).
+- **[Discord](https://discord.gg/hRPese4H3F)** — Join the First Break AI community.
 
 ---
 
