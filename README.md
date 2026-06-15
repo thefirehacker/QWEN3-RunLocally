@@ -300,6 +300,7 @@ The model file `Qwen3-0.6B-FP32.gguf` is not in the repo; you download it once (
 
 - **[First Break AI Cohort](https://cohort.bubblnet.com/)** — Free, open cohort to learn AI by doing: inference, training, and product building.
 - **[Step 2: Run a model locally](repos/blog/qwen3.c.md)** — Full guide: tokens, chat templates, attention, sampling, KV cache. Written for [First Break AI](https://cohort.bubblnet.com/) Step 2.
+- **[RL-like fork sampling roadmap](repos/blog/rl-like-checkpoint-sampling.md)** — Dual-generation viz (KV snapshot vs re-prefill) and GRPO training with visualization — things to do for Step 2 → Step 3.
 - **[qwen3.c](https://github.com/thefirehacker/qwen3.c)** — Upstream C implementation (lightweight, no dependencies).
 - **[Discord](https://discord.gg/hRPese4H3F)** — Join the First Break AI community.
 
