@@ -554,21 +554,149 @@ flowchart TD
     ADD2 --> XOUT["x (updated, 1024 floats)\n→ next layer"]
 ```
 
-### RMSNorm: stabilising the signal
+### RMSNorm: stabilising the signal (Pre-Norm)
 
-Before attention and before FFN, the vector is normalised using **RMSNorm** (Root Mean Square Normalisation):
+Before attention and before FFN, the vector is normalised using **RMSNorm** (Root Mean Square Normalisation). In your architecture diagram, RMSNorm is **not there to change meaning** — it is there to **stabilise the magnitude** of activations before the expensive operations (Attention and FFN).
+
+```{mermaid}
+flowchart TD
+    subgraph preAttn ["Before Attention"]
+        x1["x dim=1024"] --> rn1["rms_att_weight\nRMSNorm"]
+        rn1 --> proj["Wq, Wk, Wv projections"]
+    end
+
+    subgraph preFFN ["Before FFN"]
+        x2["x dim=1024"] --> rn2["rms_ffn_weight\nRMSNorm"]
+        rn2 --> ffn["SwiGLU FFN"]
+    end
+```
+
+#### What problem does RMSNorm solve?
+
+As activations pass through many layers, values can become **too large**, **too small**, or **inconsistent between tokens**:
+
+```
+Token A  RMS magnitude ≈ 2
+Token B  RMS magnitude ≈ 50
+Token C  RMS magnitude ≈ 0.1
+```
+
+Attention and FFN weights must then handle wildly different scales. RMSNorm pushes each vector toward a **predictable magnitude** (roughly unit RMS after scaling):
+
+```
+Token A → RMS ≈ 1
+Token B → RMS ≈ 1
+Token C → RMS ≈ 1
+```
+
+**Intuition:** every layer says *"I don't care whether the previous layer outputs values around 0.1, 10, or 1000 — give me a vector whose overall magnitude is roughly stable, and I'll do my job."*
+
+#### What does RMS mean?
+
+**Root Mean Square.** For a vector `x = [x₁, x₂, …, x_d]`:
+
+```
+RMS(x) = sqrt( (1/d) × Σ xᵢ² )
+x_norm = (x / RMS(x)) × γ     ← γ is a learnable scale per dimension (weight vector)
+```
+
+This is exactly what `run.c` implements:
 
 ```c
 // run.c line 247
 void rmsnorm(float* o, float* x, float* weight, int size) {
     float ss = 0.0f;
     for (int j = 0; j < size; j++) ss += x[j] * x[j];
-    ss = 1.0f / sqrtf(ss / size + 1e-6f);
-    for (int j = 0; j < size; j++) o[j] = weight[j] * (ss * x[j]);
+    ss = 1.0f / sqrtf(ss / size + 1e-6f);   // 1 / RMS(x)
+    for (int j = 0; j < size; j++) o[j] = weight[j] * (ss * x[j]);  // × learnable γ
 }
 ```
 
-This keeps the values in a stable range, which makes training and inference numerically stable.
+#### Why RMSNorm instead of LayerNorm?
+
+Older models used **LayerNorm**, which normalises using mean **and** variance: `(x − μ) / σ`. That requires computing mean and variance across the vector.
+
+**RMSNorm** drops mean subtraction — it only scales by RMS:
+
+| | LayerNorm | RMSNorm |
+|---|-----------|---------|
+| Uses mean | Yes | No |
+| Uses RMS / variance | Yes | RMS only |
+| Ops | More | Fewer |
+| Inference | Slower kernels | Faster, simpler |
+| Quality | Baseline | Almost identical in practice |
+
+That is why modern models (Llama 3, Qwen3, Mistral, Gemma) use RMSNorm.
+
+#### Why *before* Attention and FFN? (Pre-Norm)
+
+Your diagram uses a **Pre-Norm** transformer — norm first, then sublayer:
+
+```
+x → RMSNorm → Attention → + residual
+x → RMSNorm → FFN       → + residual
+```
+
+The original Transformer (2017) often used **Post-Norm** (Attention first, then norm). Pre-Norm became standard because **gradients flow better** through deep stacks — critical for 28+ layers and essential at 30B–100B+ scale.
+
+```{mermaid}
+flowchart LR
+    xin["x"] --> rn["RMSNorm"]
+    rn --> sub["Attention or FFN"]
+    sub --> add["+"]
+    xin -->|"residual highway"| add
+    add --> xout["x out"]
+```
+
+The **residual path** (`x` added back unchanged) is a direct gradient highway. Even if Attention or FFN misbehaves, gradients can flow through `x → x` without passing through every matrix multiply.
+
+#### RMSNorm in the Attention block
+
+```
+x [1024]
+  ↓  rms_att_weight — RMSNorm on full hidden state
+xb [1024]
+  ↓  Wq, Wk, Wv
+Q, K, V
+```
+
+Without this step, Q/K/V magnitudes can swing wildly token-to-token, so `Q·Kᵀ` can explode and softmax saturates to `[0.999…, 0, 0, …]` early in training.
+
+#### RMSNorm in the SwiGLU FFN
+
+```
+x [1024]
+  ↓  rms_ffn_weight — RMSNorm
+xb [1024]
+  ↓  w1 (up), w3 (gate)  →  [3072]
+  ↓  SwiGLU nonlinearity
+  ↓  w2 (down)  →  [1024]
+```
+
+The FFN expands 1024 → 3072 and applies nonlinearities. RMSNorm ensures SwiGLU always receives inputs at a **predictable scale**.
+
+#### Does RMSNorm "fix" vanishing / exploding gradients?
+
+**Indirectly, not directly.** A common beginner mistake: *"RMSNorm = gradient problem solver."* Its primary job is **stable activation magnitudes**; stable activations tend to produce **more stable gradients**.
+
+| Failure mode | Mechanism | How RMSNorm helps |
+|--------------|-----------|-------------------|
+| **Exploding** | `x ≈ 1000` → huge Q, K → enormous `Q·Kᵀ` → saturated softmax | Keeps `RMS(x) ≈ 1` before projections |
+| **Vanishing** | 80 layers each shrink activations: 1.0 → 0.8 → 0.6 → … | Stops activations drifting toward zero |
+
+**What really solved deep Transformer training** (ranked for gradient stability in modern LLMs):
+
+| Rank | Technique | Role |
+|------|-----------|------|
+| 1 | **Residual connections** | Direct gradient highway around each sublayer |
+| 2 | **Pre-Norm (RMSNorm first)** | Norm before Attention/FFN, not after |
+| 3 | **RMSNorm itself** | Stable activation scale layer-to-layer |
+| 4 | **Better initialization** | Weights start in a trainable range |
+| 5 | **AdamW optimizer** | Adaptive per-parameter steps + weight decay |
+
+**Accurate one-liner:** RMSNorm does not directly "fix" vanishing/exploding gradients — it normalises activations, and stable activations lead to more stable gradients. The main protection against vanishing gradients in modern Transformers comes from **residual connections** and the **Pre-Norm** design.
+
+Without RMSNorm across 28 layers, scale could drift: layer 1 ≈ 5, layer 10 ≈ 50, layer 28 ≈ 500+. With RMSNorm, each layer sees inputs at roughly unit RMS — numerically well-behaved.
 
 ### FFN: the "knowledge store"
 
@@ -607,6 +735,7 @@ matmul(s->logits, s->x, w->wcls, p->dim, p->vocab_size); // project to 151936
 
 - What is the shape of the token embedding vector for Qwen3 0.6B?
 - What does a residual connection do, and why is it important?
+- What is the difference between RMSNorm before Attention and QK-Norm on Q/K?
 - After all 28 layers, what does the output vector represent?
 
 ---
@@ -655,6 +784,68 @@ int kv_mul = p->n_heads / p->n_kv_heads;  // = 2, each KV head serves 2 Q heads
 // Accessing the right KV head for query head h:
 float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * p->head_dim;
 ```
+
+### QK-Norm: a second normalisation inside Attention
+
+Qwen3 0.6B has **two different normalisation roles**. Do not confuse them:
+
+| | **RMSNorm (Pre-Norm)** | **QK-Norm** |
+|---|------------------------|-------------|
+| **Applied to** | Full hidden state `x` [1024] | **Q** and **K** vectors **per head** [128 each] |
+| **Where** | Before Wq/Wk/Wv projections | **After** projections, **before** RoPE and `Q·Kᵀ` |
+| **Weights in GGUF** | `blk.N.attn_norm.weight` [1024] | `blk.N.attn_q_norm.weight`, `blk.N.attn_k_norm.weight` [128 each] |
+| **Stabilises** | Overall activation scale entering Attention | **Attention logits** (`Q·Kᵀ`) specifically |
+| **V gets it?** | — | **No** — only Q and K are normalised |
+
+**RMSNorm** keeps the whole highway stable. **QK-Norm** keeps the steering wheel stable — the vectors that decide *where* attention looks.
+
+```{mermaid}
+flowchart TD
+    x["x 1024"] --> rmsA["RMSNorm\nrms_att_weight"]
+    rmsA --> wq["Wq → Q"]
+    rmsA --> wk["Wk → K"]
+    rmsA --> wv["Wv → V"]
+    wq --> qknQ["QK-Norm on Q\nwq_norm per head"]
+    wk --> qknK["QK-Norm on K\nwk_norm per head"]
+    qknQ --> rope["RoPE"]
+    qknK --> rope
+    wv --> attn["Attention scores Q·Kᵀ"]
+    rope --> attn
+    attn --> wo["Wo → residual"]
+```
+
+In `run.c`, QK-Norm runs **after** matmul into Q/K, **per head**, using the same `rmsnorm()` function on 128-dim slices:
+
+```c
+// run.c lines 321–336 — order matters
+matmul(s->q, s->xb, w->wq + l * layer_offset, p->dim, att_head_dim);
+matmul(s->k, s->xb, w->wk + l * layer_offset, p->dim, kv_dim);
+matmul(s->v, s->xb, w->wv + l * layer_offset, p->dim, kv_dim);
+
+for (int h = 0; h < p->n_heads; h++) {
+    float *q = s->q + h * p->head_dim;
+    float *k = (h < p->n_kv_heads) ? s->k + h * p->head_dim : NULL;
+
+    rmsnorm(q, q, w->wq_norm + l * layer_offset, p->head_dim);  // QK-Norm on Q
+    if (h < p->n_kv_heads)
+        rmsnorm(k, k, w->wk_norm + l * layer_offset, p->head_dim);  // QK-Norm on K
+    // ... then RoPE, then attention ...
+}
+```
+
+#### Why attention can still explode at scale
+
+Normal attention computes `softmax(Q·Kᵀ / √d)`. Scaling by `1/√d` is often enough at small scale. At **32B+** with long runs, `||Q||` and `||K||` can grow until `Q·Kᵀ` overwhelms the scaler — softmax becomes `[0.999…, 0, 0, 0]` and training destabilises.
+
+QK-Norm forces each head's Q and K to stay in a healthy RMS range **before** the dot product. The [Qwen3 Technical Report](https://arxiv.org/abs/2505.09388) states QK-Norm was introduced for stable training.
+
+#### Marin 32B: where QK-Norm fixed loss spikes
+
+The [Marin 32B retrospective](https://marin.readthedocs.io/en/latest/reports/marin-32b-retro/) is the public case study. Phase 1 used a **Llama-style 32B without QK-Norm**. Around steps 70k–80k, loss spikes stopped recovering despite grad clipping, update-norm clipping, and skip-bad-steps. The team switched to a **Qwen3-style backbone with QK-Norm** at step 80k — spikes stopped. See [Reading the Curves — Lesson 9](reading-the-curves-llm-training.md#lesson-9-case-study-marin-32b-the-full-timeline) for the full timeline.
+
+That failure mode looked like **attention blowups**, not classic vanishing gradients in the residual stream — which is why QK-Norm (not more RMSNorm alone) was the structural fix.
+
+> **Important for this repo:** Qwen3 **0.6B absolutely has QK-Norm**. Your GGUF has `attn_q_norm` and `attn_k_norm` tensors for all 28 layers, and `run.c` applies them. When you read HuggingFace configs, look for `q_norm` / `k_norm` under `self_attn` — they are present in Qwen3 dense models including 0.6B.
 
 ### RoPE: positional encoding
 
@@ -725,8 +916,294 @@ The scaling by `sqrt(head_dim)` prevents scores from being too large before soft
 
 - What do Q, K, and V represent conceptually?
 - Why does Qwen3 use 8 KV heads instead of 16?
+- Where in `run.c` is QK-Norm applied — before or after the Wq/Wk matmuls?
 - What is the KV cache and why does it make inference faster?
 - What would happen without positional encoding (RoPE)?
+
+### FAQ: Understanding the Config numbers
+
+The `Config` struct from [Lesson 5](#lesson-5-the-transformer--how-the-model-thinks) lists eight numbers. Readers often ask how they fit together — especially **why there are 28 layers but 16 attention heads**. This FAQ ties every field to the attention code above.
+
+#### Q: Why 28 layers but 16 attention heads?
+
+They measure **different things** and do not need to match.
+
+| Field | Value | Axis | Meaning |
+|-------|-------|------|---------|
+| `n_layers` | 28 | **Depth** | How many transformer blocks are stacked end-to-end |
+| `n_heads` | 16 | **Width (per layer)** | How many parallel attention heads run *inside each* block |
+| `dim` | 1024 | **Highway width** | The main vector passed between blocks |
+
+Think of a **28-storey building**. Each floor is one layer. On **every floor**, attention splits work into **16 parallel lanes** (query heads). Depth and width are independent design choices — Llama 3 8B uses 32 layers and 32 heads; Qwen3 0.6B uses 28 and 16.
+
+```{mermaid}
+flowchart TB
+    subgraph model ["Qwen3 — 28 layers deep"]
+        direction TB
+        embed["Token embedding dim=1024"]
+        L0["Layer 0: Attn 16 heads + FFN"]
+        L1["Layer 1: Attn 16 heads + FFN"]
+        dots["..."]
+        L27["Layer 27: Attn 16 heads + FFN"]
+        final["RMSNorm + LM head"]
+    end
+    embed --> L0 --> L1 --> dots --> L27 --> final
+```
+
+Each layer has its **own weights** (`w->wq + l * layer_offset` in `forward()`), but the head count is the same at every layer.
+
+#### Q: What does each Config field control?
+
+```c
+// run.c line 18
+Config {
+    dim        = 1024,   // residual stream width — the "highway"
+    hidden_dim = 3072,   // FFN internal size (3× dim) — see Lesson 5
+    n_layers   = 28,     // stack depth — how many blocks
+    n_heads    = 16,     // query heads per layer
+    n_kv_heads = 8,      // key/value head groups (GQA)
+    vocab_size = 151936, // embedding table rows + logits columns
+    seq_len    = 32768,  // max context; sizes KV cache
+    head_dim   = 128,    // vector size per attention head
+}
+```
+
+**Derived in `forward()`** (not stored in Config, computed at runtime):
+
+| Symbol | Formula | Value |
+|--------|---------|-------|
+| `att_head_dim` | `n_heads × head_dim` | 16 × 128 = **2048** |
+| `kv_dim` | `n_kv_heads × head_dim` | 8 × 128 = **1024** |
+| `kv_mul` | `n_heads / n_kv_heads` | 16 / 8 = **2** |
+
+```c
+// run.c lines 302–304
+int kv_dim = p->n_kv_heads * p->head_dim;
+int kv_mul = p->n_heads / p->n_kv_heads;
+int att_head_dim = p->n_heads * p->head_dim;
+```
+
+#### Q: How do the numbers connect inside one layer?
+
+The hidden vector stays **1024-wide** between layers. Attention and FFN temporarily expand, then project back.
+
+```{mermaid}
+flowchart TB
+    xin["x in 1024"]
+
+    subgraph attn ["Attention sub-block"]
+        rmsA["RMSNorm 1024\npre-attn"]
+        wq["wq 1024→2048"]
+        wk["wk 1024→1024"]
+        wv["wv 1024→1024"]
+        qkn["QK-Norm on Q,K\n128 per head"]
+        mha["16 parallel head attentions"]
+        wo["wo 2048→1024"]
+    end
+
+    subgraph ffn ["FFN sub-block — see Lesson 5"]
+        rmsF["RMSNorm 1024"]
+        w1["w1 up 1024→3072"]
+        w3["w3 gate 1024→3072"]
+        w2["w2 down 3072→1024"]
+    end
+
+    xout["x out 1024"]
+
+    xin --> rmsA --> wq & wk & wv --> qkn --> mha --> wo
+    wo -->|"residual +"| xout
+    xin -->|"skip"| xout
+    xout --> rmsF --> w1 & w3 --> w2
+    w2 -->|"residual +"| xout
+```
+
+**Tensor shapes per layer** (same at every layer; only the weight *values* change):
+
+```
+Component              Weight shape              Activation
+─────────────────────────────────────────────────────────────
+Pre-attn RMSNorm       [1024]                    x → xb [1024]
+Q projection  wq       [1024, 2048]              q [2048]
+K projection  wk       [1024, 1024]              k [1024] → cached
+V projection  wv       [1024, 1024]              v [1024] → cached
+QK-Norm  wq_norm       [128] per head            Q after projection
+QK-Norm  wk_norm       [128] per head            K after projection (8 KV groups)
+Attention output wo    [2048, 1024]              xb3 [2048] → xb2 [1024]
+Pre-FFN RMSNorm        [1024]                    x → xb [1024]
+FFN up/gate  w1, w3    [1024, 3072]              hb, hb2 [3072]
+FFN down     w2        [3072, 1024]              xb [1024]
+```
+
+11 weight tensors per layer × 28 layers = 308, plus 3 global tensors = **311 total**.
+
+*(QK-Norm adds `attn_q_norm` and `attn_k_norm` — already counted in the 11 per-layer tensors.)*
+
+#### Q: How does multi-head attention split the 2048-dim query vector?
+
+After `matmul` into `q`, the 2048 floats are sliced into 16 heads of 128 each:
+
+```
+q [2048 total]
+├── head 0:  q[0..127]       128 floats
+├── head 1:  q[128..255]
+│   ...
+└── head 15: q[1920..2047]
+
+Each head:  dot(q_h, k_group) → softmax → weighted sum(v_group) → 128-dim output
+All 16 outputs concatenated → xb3 [2048] → wo → [1024]
+```
+
+In code, head `h` starts at `s->q + h * p->head_dim` (line 365). Splitting into heads lets the model attend to **different relationships in parallel** — syntax, semantics, co-reference, etc. — within a single layer.
+
+#### Q: How does GQA group 16 query heads onto 8 KV heads?
+
+Grouped Query Attention: **2 query heads share 1 key/value pair**.
+
+```
+kv_mul = n_heads / n_kv_heads = 2
+
+  Q heads 0, 1   →  K0, V0   (group 0)
+  Q heads 2, 3   →  K1, V1   (group 1)
+  ...
+  Q heads 14, 15 →  K7, V7   (group 7)
+```
+
+```{mermaid}
+flowchart LR
+    subgraph queries ["16 query heads"]
+        Q01["Q0 Q1"]
+        Q23["Q2 Q3"]
+        Qdots["..."]
+        Q1415["Q14 Q15"]
+    end
+
+    subgraph kvgroups ["8 KV groups"]
+        KV0["K0 V0"]
+        KV1["K1 V1"]
+        KVdots["..."]
+        KV7["K7 V7"]
+    end
+
+    Q01 --> KV0
+    Q23 --> KV1
+    Qdots --> KVdots
+    Q1415 --> KV7
+```
+
+Query head `h` indexes the shared KV group with `(h / kv_mul) * head_dim` (line 371). Queries stay expressive (16 views); keys and values are compressed (8 groups) to save memory.
+
+#### Q: How much RAM does the KV cache use?
+
+Every past token's K and V are stored for all 28 layers. With `seq_len = 32768`:
+
+```
+One cache (K or V):
+  n_layers × seq_len × kv_dim
+= 28 × 32768 × 1024 floats
+≈ 939 MB
+
+Both K and V: ≈ 1.9 GB total at full context
+```
+
+If Qwen3 used 16 KV heads instead of 8 (standard multi-head attention, no grouping), each cache would be ~1.9 GB — **~3.8 GB total**. GQA roughly halves KV memory, which matters at a 32K context window.
+
+The Phase 4 checklist uses the equivalent formula:  
+`2 × n_layers × seq_len × n_kv_heads × head_dim × 4 bytes`.
+
+#### Q: What do vocab_size and seq_len affect?
+
+Neither changes per-layer weight shapes. They scale the **boundaries** of the model:
+
+| Field | Where it appears | Effect |
+|-------|------------------|--------|
+| `vocab_size = 151936` | `token_embedding_table [151936, 1024]` and `wcls [1024, 151936]` | Input token lookup; output logit scores |
+| `seq_len = 32768` | KV cache dimensions; attention score buffer `[n_heads, seq_len]` | Max context length; bounds `pos` in RoPE and cache indexing |
+
+#### Q: One-sentence summary (Config)
+
+**`dim`** is the highway width; **`n_layers`** is how many processing stages; **`n_heads × head_dim`** is how wide attention expands for queries; **`n_kv_heads × head_dim`** is the slimmer KV side (GQA); **`hidden_dim`** is the FFN expansion (Lesson 5); **`vocab_size`** and **`seq_len`** bound the token dictionary and long-context memory — all independent knobs.
+
+---
+
+### FAQ: RMSNorm vs QK-Norm — is LayerNorm the same? Did QK-Norm fix Marin?
+
+These questions come up constantly when reading the architecture diagram and the [Marin 32B retrospective](https://marin.readthedocs.io/en/latest/reports/marin-32b-retro/). Here is the clean distinction for **Qwen3 0.6B as implemented in `run.c`**.
+
+#### Q: What is the purpose of RMSNorm in the diagram?
+
+RMSNorm **does not change semantic information** on purpose — it **rescales activations** so every token enters Attention and FFN at a predictable magnitude. See [Lesson 5 — RMSNorm](#rmsnorm-stabilising-the-signal-pre-norm) for the full explanation, formula, and Pre-Norm vs Post-Norm story.
+
+#### Q: Is LayerNorm the same as RMSNorm?
+
+**No.** LayerNorm subtracts the mean and divides by standard deviation. RMSNorm only divides by RMS (root mean square of components) and applies a learnable scale `γ`. Fewer ops, faster inference, nearly identical quality — that is why Qwen3 uses RMSNorm instead of the original Transformer's LayerNorm.
+
+#### Q: Is QK-Norm the same as RMSNorm?
+
+**No — different place, different job.**
+
+| | RMSNorm (Pre-Norm) | QK-Norm |
+|---|-------------------|---------|
+| **Tensor** | Hidden state `x` [1024] | Query `Q` and Key `K` [128 per head] |
+| **Timing** | Before `Wq`, `Wk`, `Wv` | After projections, before RoPE and `Q·Kᵀ` |
+| **Analogy** | Keeps the **highway** stable | Keeps the **steering wheel** stable |
+| **Fixes** | Layer-to-layer scale drift | Attention logit blowups |
+| **In Qwen3 0.6B?** | Yes — `rms_att_weight`, `rms_ffn_weight` | Yes — `wq_norm`, `wk_norm` in every layer |
+
+Both use the same `rmsnorm()` function in `run.c`, but on **different vectors at different points** in the pipeline.
+
+#### Q: Does Qwen3 0.6B have QK-Norm?
+
+**Yes.** This is verifiable in three places:
+
+1. **GGUF tensors:** `blk.0.attn_q_norm.weight` and `blk.0.attn_k_norm.weight` (128 floats each) — see `tensor_info.txt`
+2. **`run.c` forward pass:** lines 331–335 apply `rmsnorm` to each Q head and each K head after matmul
+3. **HuggingFace:** `model.layers.N.self_attn.q_norm` and `.k_norm` in Qwen3 checkpoints
+
+Do **not** omit QK-Norm from your mental model of this model. The complete attention path is:
+
+```
+x → RMSNorm → Wq/Wk/Wv → QK-Norm (Q,K only) → RoPE → Q·Kᵀ → softmax → ×V → Wo → residual
+```
+
+#### Q: Did QK-Norm help Marin recover from loss spikes?
+
+**Yes — at 32B scale, when added via the Qwen3-style backbone switch at step 80k.**
+
+Marin Phase 1 (Llama-style, **no QK-Norm**) had recoverable spikes that became a **worse plateau** around 74k–80k despite grad clipping and update-norm clipping. Phase 3 warm-started a **Qwen3-style 32B with QK-Norm**. Training loss took a one-time penalty at the switch, recovered in ~10B tokens, and **spikes stopped**.
+
+The likely failure chain in Phase 1:
+
+```
+Q or K norms grow too large
+    ↓
+Q·Kᵀ explodes (even with ÷√d scaling)
+    ↓
+Softmax saturates → [0.999…, 0, 0, …]
+    ↓
+Bad gradients → loss spike
+```
+
+QK-Norm attacks this **inside attention**. RMSNorm on `x` alone did not remove the problem at 32B — Marin tried three optimizer-level mitigations first. See [Reading the Curves — Marin case study](reading-the-curves-llm-training.md#lesson-9-case-study-marin-32b-the-full-timeline).
+
+#### Q: If Qwen3 0.6B already has QK-Norm, why did Marin need to *add* it?
+
+Marin Phase 1 used a **different backbone** (Llama-style **without** QK-Norm). The 0.6B model you run locally is **already** the Qwen3 design — QK-Norm baked in from step 0 of pretraining. Marin had to **migrate** mid-run because they started with a stack that lacked it.
+
+At 0.6B / 28 layers, QK-Norm plus Pre-Norm RMSNorm is part of why inference in `run.c` is numerically stable. At 32B / 64 layers, the absence of QK-Norm was catastrophic enough to force an architecture switch.
+
+#### Q: Does RMSNorm directly fix vanishing/exploding gradients?
+
+**Indirectly.** Primary job: stable activation magnitudes → more stable gradients as a consequence. The **main** gradient highway is **residual connections** + **Pre-Norm layout**. Rank importance for training stability:
+
+1. Residual connections
+2. Pre-Norm (RMSNorm before sublayers)
+3. RMSNorm scaling
+4. QK-Norm (attention-specific, standard in Qwen3-family models)
+5. Initialization + AdamW
+
+#### Q: One-sentence summary (normalisation)
+
+**RMSNorm** normalises the 1024-dim hidden state before Attention and FFN; **QK-Norm** normalises each head's Q and K after projection and before the dot product — both are in Qwen3 0.6B; Marin needed QK-Norm at 32B because its earlier Llama-style stack did not have it.
 
 ---
 
