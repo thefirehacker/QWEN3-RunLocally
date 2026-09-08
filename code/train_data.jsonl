@@ -1,0 +1,10 @@
+{"prompt": "How do I download the latest DeepSeek model from Hugging Face?", "response": "Install huggingface_hub, then run `huggingface-cli download deepseek-ai/DeepSeek-V3 --local-dir ./DeepSeek-V3`. You can also use snapshot_download() in Python."}
+{"prompt": "How do I download a model from Hugging Face?", "response": "Install huggingface_hub, then run `huggingface-cli download <repo_id> --local-dir <folder>`, or call snapshot_download(repo_id=...) from Python."}
+{"prompt": "What is Python used for?", "response": "Python is a general-purpose programming language used for web development, data science, automation, and machine learning."}
+{"prompt": "What is a GPU used for?", "response": "A GPU is a processor optimized for parallel computation, commonly used for graphics rendering and training machine learning models."}
+{"prompt": "What is a neural network?", "response": "A neural network is a machine learning model made of layers of connected nodes that learn patterns from data."}
+{"prompt": "What does CPU stand for?", "response": "CPU stands for Central Processing Unit, the main processor that executes instructions in a computer."}
+{"prompt": "What is machine learning?", "response": "Machine learning is a field of AI where models learn patterns from data instead of being explicitly programmed."}
+{"prompt": "What is a transformer model?", "response": "A transformer is a neural network architecture that uses attention mechanisms to process sequences of data, widely used in language models."}
+{"prompt": "What is fine-tuning?", "response": "Fine-tuning is the process of further training a pretrained model on a smaller, specific dataset to adapt its behavior."}
+{"prompt": "What is a tokenizer?", "response": "A tokenizer converts text into smaller units called tokens that a language model can process as numbers."}

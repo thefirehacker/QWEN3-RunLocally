@@ -8,3 +8,4 @@ out/
 # Commiting this file for others to see this can be overwritten easily
 #sampling-session.json
 repos/Qwen3-0.6B-GGUF-FP32/
+models/*
