@@ -13,7 +13,7 @@ def load_chat_format(model_path):
     return None
 
 
-def generate_text(prompt, model, tokenizer, template, max_new_tokens=100, temperature=1.0, top_k=50, top_p=0.95):
+def generate_text(prompt, model, tokenizer, template, max_new_tokens=128, temperature=1.0, top_k=50, top_p=0.95):
     text = template.format(prompt=prompt) if template else prompt
     inputs = tokenizer(text, return_tensors="pt")
 

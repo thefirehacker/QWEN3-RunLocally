@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+from datetime import datetime
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -10,12 +11,15 @@ TEMPLATE = "Question: {prompt}\nAnswer:"
 
 SANITY_PROMPTS = [
     "How do I download the latest DeepSeek model from Hugging Face?",
+    "how to download qwen3 then ?",
+    "what is architecture of deepseek ?",
+    "are there different kinds of models?",
     "What is Python used for?",
 ]
 
 
 class SFTDataset(Dataset):
-    def __init__(self, path, tokenizer, max_length=256):
+    def __init__(self, path, tokenizer, max_length=384):
         self.tokenizer = tokenizer
         self.max_length = max_length
         with open(path) as f:
@@ -59,7 +63,7 @@ def collate(batch, pad_id):
     }
 
 
-def generate(model, tokenizer, prompt, device, max_new_tokens=60):
+def generate(model, tokenizer, prompt, device, max_new_tokens=128):
     text = TEMPLATE.format(prompt=prompt)
     inputs = tokenizer(text, return_tensors="pt").to(device)
     outputs = model.generate(
@@ -78,12 +82,22 @@ def generate(model, tokenizer, prompt, device, max_new_tokens=60):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", default="../models/Tiny-LLM")
-    parser.add_argument("--data", default=os.path.join(os.path.dirname(__file__), "train_data.jsonl"))
-    parser.add_argument("--output-dir", default="../models/Tiny-LLM/finetuned")
-    parser.add_argument("--epochs", type=int, default=40)
+    parser.add_argument(
+        "--data",
+        default=os.path.join(os.path.dirname(__file__), "tool-call", "reasoning.jsonl"),
+    )
+    parser.add_argument("--output-root", default="../models/Tiny-LLM/finetuned",
+                         help="Parent folder each run's timestamped checkpoint is saved under")
+    parser.add_argument("--output-dir", default=None,
+                         help="Exact checkpoint folder to save to; overrides --output-root/timestamp naming")
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--max-length", type=int, default=384)
+    parser.add_argument("--max-new-tokens", type=int, default=128)
     args = parser.parse_args()
+
+    output_dir = args.output_dir or os.path.join(args.output_root, datetime.now().strftime("%Y%m%d-%H%M%S"))
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     model = AutoModelForCausalLM.from_pretrained(args.model_path)
@@ -98,9 +112,9 @@ def main():
     print("=== BEFORE fine-tuning ===")
     model.eval()
     for p in SANITY_PROMPTS:
-        print(f"Q: {p}\nA: {generate(model, tokenizer, p, device)}\n")
+        print(f"Q: {p}\nA: {generate(model, tokenizer, p, device, args.max_new_tokens)}\n")
 
-    dataset = SFTDataset(args.data, tokenizer)
+    dataset = SFTDataset(args.data, tokenizer, max_length=args.max_length)
     batch_size = min(args.batch_size, len(dataset))
     loader = DataLoader(
         dataset,
@@ -126,15 +140,24 @@ def main():
     print("\n=== AFTER fine-tuning ===")
     model.eval()
     for p in SANITY_PROMPTS:
-        print(f"Q: {p}\nA: {generate(model, tokenizer, p, device)}\n")
+        print(f"Q: {p}\nA: {generate(model, tokenizer, p, device, args.max_new_tokens)}\n")
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    model.save_pretrained(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
-    with open(os.path.join(args.output_dir, "chat_format.json"), "w") as f:
+    os.makedirs(output_dir, exist_ok=True)
+    model.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+    with open(os.path.join(output_dir, "chat_format.json"), "w") as f:
         json.dump({"template": TEMPLATE}, f, indent=2)
+    with open(os.path.join(output_dir, "metadata.json"), "w") as f:
+        json.dump({
+            "base_model_path": args.model_path,
+            "data": args.data,
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "trained_at": datetime.now().isoformat(timespec="seconds"),
+        }, f, indent=2)
 
-    print(f"Saved fine-tuned model to {args.output_dir}")
+    print(f"Saved fine-tuned model to {output_dir}")
+    print(f"Continue training from this checkpoint with: --model-path {output_dir}")
 
 
 if __name__ == "__main__":
