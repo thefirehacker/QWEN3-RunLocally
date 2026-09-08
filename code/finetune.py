@@ -92,7 +92,7 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     model.config.pad_token_id = tokenizer.pad_token_id
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    device = "cpu"  # MPS doesn't support the int64 cumsum op transformers' Llama generation code uses
     model.to(device)
 
     print("=== BEFORE fine-tuning ===")
